@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Web Rocket League Clone</title>
+    <style>
+        body { margin: 0; padding: 0; overflow: hidden; background: #000; font-family: sans-serif; user-select: none; }
+        #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+        
+        /* iPad Touch Controls Overlay */
+        .joystick-container {
+            position: absolute; bottom: 40px; left: 40px;
+            width: 120px; height: 120px; background: rgba(255,255,255,0.1);
+            border: 2px solid rgba(255,255,255,0.4); border-radius: 50%;
+            display: flex; align-items: center; justify-content: center; touch-action: none; z-index: 5;
+        }
+        .joystick-knob {
+            width: 50px; height: 50px; background: #007bff; border-radius: 50%;
+            box-shadow: 0 0 10px #007bff; pointer-events: none;
+        }
+        .action-btn {
+            position: absolute; bottom: 40px; right: 40px;
+            width: 80px; height: 80px; background: #ff4757; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            color: white; font-weight: bold; font-size: 18px; border: 2px solid #fff;
+            box-shadow: 0 0 15px #ff4757; touch-action: none; z-index: 5;
+        }
+
+        /* UI Overlays */
+        #scoreboard {
+            position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+            background: rgba(0,0,0,0.6); padding: 10px 30px; border-radius: 20px;
+            color: white; font-size: 24px; font-weight: bold; letter-spacing: 2px;
+            border: 1px solid #333; display: flex; gap: 20px; z-index: 5;
+        }
+        .blue-score { color: #3498db; }
+        .orange-score { color: #e67e22; }
+
+        #menu {
+            position: absolute; inset: 0; background: rgba(10, 15, 30, 0.95);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            color: white; z-index: 10;
+        }
+        .menu-btn {
+            background: linear-gradient(135deg, #0056b3, #007bff); color: white;
+            border: none; padding: 15px 40px; margin: 10px; font-size: 20px;
+            border-radius: 10px; cursor: pointer; min-width: 250px; font-weight: bold;
+        }
+    </style>
+    <!-- Include Three.js for 3D Graphics -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+
+    <div id="menu">
+        <h1>NEON STADIUM: CAR SOCCER</h1>
+        <p>Select Bot Level:</p>
+        <button class="menu-btn" onclick="startGame('easy')">Rookie Bots (Easy)</button>
+        <button class="menu-btn" onclick="startGame('pro')">All-Star Bots (Hard)</button>
+    </div>
+
+    <div id="scoreboard">
+        <span class="blue-score">PLAYER: <span id="p-score">0</span></span>
+        <span>vs</span>
+        <span class="orange-score">BOTS: <span id="b-score">0</span></span>
+    </div>
+
+    <div id="canvas-container"></div>
+
+    <!-- iPad Virtual Controls -->
+    <div class="joystick-container" id="joystick">
+        <div class="joystick-knob" id="knob"></div>
+    </div>
+    <div class="action-btn" id="boost-btn">BOOST</div>
+
+    <script>
+        let scene, camera, renderer, car, ball, bot;
+        let pScore = 0, bScore = 0;
+        let botDifficulty = 'easy';
+        
+        // Input tracking
+        let joystickInput = { x: 0, y: 0 };
+        let isBoosting = false;
+
+        function initEngine() {
+            const container = document.getElementById('canvas-container');
+            
+            // 1. Scene & Renderer Setup
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x0a0f1d);
+            scene.fog = new THREE.FogExp2(0x0a0f1d, 0.015);
+
+            camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.1, 1000);
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            container.appendChild(renderer.domElement);
+
+            // 2. High-Quality Lighting
+            const ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
+            scene.add(ambientLight);
+
+            const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            dirLight.position.set(20, 40, 20);
+            dirLight.castShadow = true;
+            scene.add(dirLight);
+
+            // 3. Build Arena Grid Texture
+            createArena();
+
+            // 4. Create Player Car
+            car = createVehicle(0x007bff, new THREE.Vector3(0, 1, 30));
+            
+            // 5. Create Bot Car
+            bot = createVehicle(0xe67e22, new THREE.Vector3(0, 1, -30));
+
+            // 6. Create Soccer Ball
+            createBall();
+
+            // Setup Camera position
+            camera.position.set(0, 8, 45);
+
+            setupTouchControls();
+            animate();
+        }
+
+        function createArena() {
+            // Textured Neon Floor Grid
+            const floorGeo = new THREE.PlaneGeometry(60, 100);
+            const floorMat = new THREE.MeshStandardMaterial({ 
+                color: 0x111936, 
+                roughness: 0.2, 
+                metalness: 0.5,
+                side: THREE.DoubleSide 
+            });
+            const floor = new THREE.Mesh(floorGeo, floorMat);
+            floor.rotation.x = -Math.PI / 2;
+            floor.receiveShadow = true;
+            scene.add(floor);
+
+            // Glowing Grid Lines
+            const grid = new THREE.GridHelper(100, 50, 0x00ffff, 0x223366);
+            grid.position.y = 0.01;
+            scene.add(grid);
+
+            // Simple Stadium Boundaries / Goals
+            const goalGeo = new THREE.BoxGeometry(16, 8, 2);
+            const playerGoal = new THREE.Mesh(goalGeo, new THREE.MeshBasicMaterial({ color: 0x007bff, wireframe: true }));
+            playerGoal.position.set(0, 4, 50);
+            scene.add(playerGoal);
+
+            const botGoal = new THREE.Mesh(goalGeo, new THREE.MeshBasicMaterial({ color: 0xe67e22, wireframe: true }));
+            botGoal.position.set(0, 4, -50);
+            scene.add(botGoal);
+        }
+
+        function createVehicle(color, position) {
+            const group = new THREE.Group();
+            
+            // Car Body
+            const bodyGeo = new THREE.BoxGeometry(3, 1.2, 5);
+            const bodyMat = new THREE.MeshStandardMaterial({ color: color, roughness: 0.3, metalness: 0.7 });
+            const body = new THREE.Mesh(bodyGeo, bodyMat);
+            body.castShadow = true;
+            group.add(body);
+
+            // Glowing Spoiler/Accents
+            const neonGeo = new THREE.BoxGeometry(2.8, 0.2, 0.5);
+            const neonMat = new THREE.MeshBasicMaterial({ color: color === 0x007bff ? 0x00ffff : 0xffa500 });
+            const neon = new THREE.Mesh(neonGeo, neonMat);
+            neon.position.set(0, 0.7, -2);
+            group.add(neon);
+
+            group.position.copy(position);
+            group.userData = { velocity: new THREE.Vector3(), heading: 0 };
+            scene.add(group);
+            return group;
+        }
+
+        function createBall() {
+            const ballGeo = new THREE.SphereGeometry(2.2, 32, 32);
+            const ballMat = new THREE.MeshStandardMaterial({ 
+                color: 0xffffff, 
+                wireframe: false,
+                roughness: 0.1,
+                metalness: 0.3
+            });
+            ball = new THREE.Mesh(ballGeo, ballMat);
+            ball.position.set(0, 2.2, 0);
+            ball.castShadow = true;
+            ball.userData = { velocity: new THREE.Vector3(0, 0, 0) };
+            scene.add(ball);
+        }
+
+        function setupTouchControls() {
+            const knob = document.getElementById('knob');
+            const joystick = document.getElementById('joystick');
+            const boostBtn = document.getElementById('boost-btn');
+
+            // Joystick Logic
+            joystick.addEventListener('touchstart', handleJoystick, { passive: false });
+            joystick.addEventListener('touchmove', handleJoystick, { passive: false });
+            joystick.addEventListener('touchend', () => {
+                knob.style.transform = 'translate(0px, 0px)';
+                joystickInput = { x: 0, y: 0 };
+            });
+
+            function handleJoystick(e) {
+                e.preventDefault();
+                const touch = e.touches[0];
+                const rect = joystick.getBoundingClientRect();
+                const centerX = rect.left + rect.width / 2;
+                const centerY = rect.top + rect.height / 2;
+                
+                let deltaX = touch.clientX - centerX;
+                let deltaY = touch.clientY - centerY;
+                const distance = Math.min(60, Math.sqrt(deltaX * deltaX + deltaY * deltaY));
+                
+                const angle = Math.atan2(deltaY, deltaX);
+                const moveX = distance * Math.cos(angle);
+                const moveY = distance * Math.sin(angle);
+
+                knob.style.transform = `translate(${moveX}px, ${moveY}px)`;
+                
+                // Normalize values between -1 and 1
+                joystickInput.x = moveX / 60;
+                joystickInput.y = -moveY / 60;
+            }
+
+            // Boost Button Logic
+            boostBtn.addEventListener('touchstart', (e) => { e.preventDefault(); isBoosting = true; });
+            boostBtn.addEventListener('touchend', (e) => { e.preventDefault(); isBoosting = false; });
+        }
+
+        function runBotAI() {
+            // Basic tracking vector toward the ball
+            let directionToBall = new THREE.Vector3().subVectors(ball.position, bot.position);
+            directionToBall.y = 0; // Keep on ground
+            directionToBall.normalize();
+
+            let speed = botDifficulty === 'easy' ? 0.12 : 0.22;
+            
+            // Move bot toward ball
+            bot.position.addScaledVector(directionToBall, speed);
+            
+            // Rotate bot toward movement
+            let targetAngle = Math.atan2(directionToBall.x, directionToBall.z);
+            bot.rotation.y = targetAngle;
+        }
+
+        function checkCollisions() {
+            // Car vs Ball Physics Interaction
+            let distToPlayer = car.position.distanceTo(ball.position);
+            if (distToPlayer < 3.5) {
+                let pushDir = new THREE.Vector3().subVectors(ball.position, car.position).normalize();
+                let force = isBoosting ? 0.8 : 0.4;
+                ball.userData.velocity.addScaledVector(pushDir, force);
+            }
+
+            let distToBot = bot.position.distanceTo(ball.position);
+            if (distToBot < 3.5) {
+                let pushDir = new THREE.Vector3().subVectors(ball.position, bot.position).normalize();
+                ball.userData.velocity.addScaledVector(pushDir, 0.4);
+            }
+
+            // Ball Environment & Decay Physics
+            ball.position.add(ball.userData.velocity);
+            ball.userData.velocity.multiplyScalar(0.98); // Friction slowing down ball
+
+            // Goal detection
+            if (ball.position.z > 50) { bScore++; resetPitch(); }
+            if (ball.position.z < -50) { pScore++; resetPitch(); }
+
+            // Pitch Boundaries
+            if (Math.abs(ball.position.x) > 30) ball.userData.velocity.x *= -1;
+            if (Math.abs(ball.position.z) > 50) ball.userData.velocity.z *= -1;
+        }
+
+        function resetPitch() {
+            document.getElementById('p-score').innerText = pScore;
+            document.getElementById('b-score').innerText = bScore;
+            ball.position.set(0, 2.2, 0);
+            ball.userData.velocity.set(0,0,0);
+            car.position.set(0, 1, 30);
+            bot.position.set(0, 1, -30);
+        }
+
+        function animate() {
+            requestAnimationFrame(animate);
+
+            // Handle Player Physics
+            let currentSpeed = isBoosting ? 0.4 : 0.22;
+            if (Math.abs(joystickInput.y) > 0.1) {
+                car.position.z -= joystickInput.y * currentSpeed;
+            }
+            if (Math.abs(joystickInput.x) > 0.1) {
+                car.position.x += joystickInput.x * currentSpeed;
+                car.rotation.y = -joystickInput.x * 0.5; // Slight wheel tilt rotation
+            }
+
+            // AI Logic
+            runBotAI();
+
+            // Global Physics check
+            checkCollisions()
+
+            // Smooth Camera Follow Player
+            camera.position.x = THREE.MathUtils.lerp(camera.position.x, car.position.x, 0.05);
+            camera.position.z = THREE.MathUtils.lerp(camera.position.z, car.position.z + 18, 0.05);
+            camera.lookAt(ball.position);
+
+            renderer.render(scene, camera);
+        }
+
+        function startGame(mode) {
+            botDifficulty = mode;
+            document.getElementById('menu').style.display = 'none';
+            initEngine();
+        }
+
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
